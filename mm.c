@@ -154,8 +154,6 @@ static void _build(void *ptr, size_t size) {
         blksize -= size;
         WRITE(GET_HEADER(split), PACK(blksize, 0));
         WRITE(GET_FOOTER(split), PACK(blksize, 0));
-        SET_PRED_FREE(split, 0);
-        SET_SUCC_FREE(split, 0);
     //dbg_printf("split merge %lld\n", (long long)split);
         _merge_free_blocks(split);
     } else {
@@ -172,8 +170,6 @@ static void *_extend_heap(size_t extend_size) {
     }
     WRITE(GET_HEADER(ptr), PACK(extend_size, 0));
     WRITE(GET_FOOTER(ptr), PACK(extend_size, 0));
-    SET_PRED_FREE(ptr, 0);
-    SET_SUCC_FREE(ptr, 0);
     WRITE(GET_HEADER(SUCC_BLK(ptr)), PACK(0, 1));
     return _merge_free_blocks(ptr);
 }
@@ -246,8 +242,6 @@ void free(void *ptr) {
     size_t size = GET_SIZE(GET_HEADER(ptr));
     WRITE(GET_HEADER(ptr), PACK(size, 0));
     WRITE(GET_FOOTER(ptr), PACK(size, 0));
-    SET_PRED_FREE(ptr, 0);
-    SET_SUCC_FREE(ptr, 0);
     _merge_free_blocks(ptr);
 }
 

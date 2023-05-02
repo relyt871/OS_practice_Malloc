@@ -66,35 +66,22 @@
 #define MAX(x, y) ((x) < (y)? (y) : (x))
 #define MIN(x, y) ((x) < (y)? (x) : (y))
 
-const int max_level = 17;
-const size_t threshold[20] = {32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576, 2097152}; //17 thresholds - 18 levels
-
 static char *heap_ptr;
-static char *free_blks[20];
-
-static int _get_level(size_t size) {
-    for (int i = 0; i < max_level; ++i) {
-        if (size <= threshold[i]) {
-            return i;
-        }
-    }
-    return max_level;
-}
+static char *free_blks = NULL;
 
 static void _insert_free_block(void *ptr) {
     if (ptr == NULL) {
         return;
     }
     //dbg_printf("insert free %lld size = %d\n", (long long)ptr, (int)GET_SIZE(GET_HEADER(ptr)));
-    int level = _get_level(GET_SIZE(GET_HEADER(ptr)));
-    if (free_blks[level] == NULL) {
-        free_blks[level] = ptr;
+    if (free_blks == NULL) {
+        free_blks = ptr;
         SET_PRED_FREE(ptr, 0);
         SET_SUCC_FREE(ptr, 0);
     } else {
-        SET_SUCC_FREE(ptr, free_blks[level]);
-        SET_PRED_FREE(free_blks[level], ptr);
-        free_blks[level] = ptr;
+        SET_SUCC_FREE(ptr, free_blks);
+        SET_PRED_FREE(free_blks, ptr);
+        free_blks = ptr;
         SET_PRED_FREE(ptr, 0);
     }
 }
@@ -104,15 +91,14 @@ static void _delete_free_block(void *ptr) {
         return;
     }
     //dbg_printf("delete free %lld size = %d\n", (long long)ptr, (int)GET_SIZE(GET_HEADER(ptr)));
-    int level = _get_level(GET_SIZE(GET_HEADER(ptr)));
     void *succ_free = SUCC_FREE(ptr);
     //dbg_printf("succ_free = %lld\n", (long long)succ_free);
-    if (free_blks[level] == ptr) {
+    if (free_blks == ptr) {
         if (succ_free == NULL) {
-            free_blks[level] = NULL;
+            free_blks = NULL;
         } else {
-            free_blks[level] = succ_free;
-            SET_PRED_FREE(free_blks[level], 0);
+            free_blks = succ_free;
+            SET_PRED_FREE(free_blks, 0);
         }
     } else {
         void *pred_free = PRED_FREE(ptr);
@@ -168,8 +154,6 @@ static void _build(void *ptr, size_t size) {
         blksize -= size;
         WRITE(GET_HEADER(split), PACK(blksize, 0));
         WRITE(GET_FOOTER(split), PACK(blksize, 0));
-        SET_PRED_FREE(split, 0);
-        SET_SUCC_FREE(split, 0);
     //dbg_printf("split merge %lld\n", (long long)split);
         _merge_free_blocks(split);
     } else {
@@ -186,8 +170,6 @@ static void *_extend_heap(size_t extend_size) {
     }
     WRITE(GET_HEADER(ptr), PACK(extend_size, 0));
     WRITE(GET_FOOTER(ptr), PACK(extend_size, 0));
-    SET_PRED_FREE(ptr, 0);
-    SET_SUCC_FREE(ptr, 0);
     WRITE(GET_HEADER(SUCC_BLK(ptr)), PACK(0, 1));
     return _merge_free_blocks(ptr);
 }
@@ -196,22 +178,20 @@ static void *_allocate(size_t size) {
     char *best_fit = NULL;
     size_t best_fit_size = 0;
     int fit_cnt = 0;
-    for (int i = _get_level(size); i <= max_level; ++i) {
-        for (void* ptr = free_blks[i]; ptr != NULL; ptr = SUCC_FREE(ptr)) {
-            size_t now_size = GET_SIZE(GET_HEADER(ptr));
-            if (now_size >= size) {
-                if (best_fit == NULL || now_size < best_fit_size) {
-                    best_fit = ptr;
-                    best_fit_size = now_size;
-                }
-                if (++fit_cnt == 42) {
-                    return best_fit;
-                }
+    for (void* ptr = free_blks; ptr != NULL; ptr = SUCC_FREE(ptr)) {
+        size_t now_size = GET_SIZE(GET_HEADER(ptr));
+        if (now_size >= size) {
+            if (best_fit == NULL || now_size < best_fit_size) {
+                best_fit = ptr;
+                best_fit_size = now_size;
+            }
+            if (++fit_cnt == 42) {
+                return best_fit;
             }
         }
-        if (best_fit != NULL) {
-            return best_fit;
-        }
+    }
+    if (best_fit != NULL) {
+        return best_fit;
     }
     return NULL;
 }
@@ -227,12 +207,7 @@ int mm_init(void) {
     WRITE(heap_ptr + (4 * WSIZE), PACK(ESIZE, 1));
     WRITE(heap_ptr + (5 * WSIZE), PACK(0, 1));
     heap_ptr += ESIZE;
-    for (int i = 0; i <= max_level; ++i) {
-        free_blks[i] = NULL;
-    }
-    if (_extend_heap(CHUNKSIZE / WSIZE) == NULL) {
-        return -1;
-    }
+    free_blks = NULL;
     return 0;
 }
 
@@ -248,9 +223,9 @@ void *malloc(size_t size) {
         _build(ptr, size);
         return ptr;
     } else { //no fit, must extend the heap
-        ptr = _extend_heap(MAX(size, CHUNKSIZE) / WSIZE);
+        ptr = _extend_heap(size / WSIZE);
         if (ptr == NULL) {
-        return NULL;
+            return NULL;
         }
         _build(ptr, size);
         return ptr;
@@ -264,8 +239,6 @@ void free(void *ptr) {
     size_t size = GET_SIZE(GET_HEADER(ptr));
     WRITE(GET_HEADER(ptr), PACK(size, 0));
     WRITE(GET_FOOTER(ptr), PACK(size, 0));
-    SET_PRED_FREE(ptr, 0);
-    SET_SUCC_FREE(ptr, 0);
     _merge_free_blocks(ptr);
 }
 

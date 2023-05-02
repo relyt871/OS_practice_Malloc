@@ -31,7 +31,7 @@
  **********************/
 
 /* OJ */
-// #define OJ
+#define OJ
 
 /* Misc */
 #define MAXLINE     1024 /* max string size */

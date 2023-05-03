@@ -1,4 +1,4 @@
-/* malloc: segregated list + first 42 best fit */
+/* malloc: segregated list + first 10 best fit */
 
 #include <assert.h>
 #include <stdio.h>
@@ -197,7 +197,7 @@ static void *_allocate(size_t size) {
                 best_fit = ptr;
                 best_fit_size = now_size;
             }
-            if (++fit_cnt == 42) {
+            if (++fit_cnt == 10) {
                 return best_fit;
             }
         }

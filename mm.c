@@ -1,4 +1,4 @@
-/* malloc: single free list + first fit */
+/* malloc: segregated lists + first 42 best fit */
 
 #include <assert.h>
 #include <stdio.h>
@@ -43,9 +43,8 @@
 #define WRITE(p, val) (*(unsigned int *)(p) = (val))
 
 /* read the header info from address p */
-#define GET_SIZE(p)     (READ(p) & ~0x7)
-#define GET_ALLOC(p)    (READ(p) & 0x1)
-#define GET_PREALLOC(p) (READ(p) & 0x2)
+#define GET_SIZE(p)  (READ(p) & ~0x7)
+#define GET_ALLOC(p) (READ(p) & 0x1)
 
 /* given block ptr bp, compute address of header and footer */
 #define GET_HEADER(bp) ((char *)(bp) - WSIZE)
@@ -67,9 +66,9 @@
 #define MIN(x, y) ((x) < (y)? (x) : (y))
 
 const int max_level = 17;
-const size_t threshold[20] = {32, 48, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576}; //17 thresholds - 18 levels
+const size_t threshold[20] = {32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576, 2097152}; //17 thresholds - 18 levels
 
-static char *heap_ptr, *heap_end;
+static char *heap_ptr;
 static char *free_blks[20];
 
 static int _get_level(size_t size) {
@@ -127,33 +126,26 @@ static void _delete_free_block(void *ptr) {
 }
 
 static void *_merge_free_blocks(void *ptr) {
-    size_t pred_alloc = GET_PREALLOC(GET_HEADER(ptr));
+    size_t pred_alloc = GET_ALLOC(PRED_FOOTER(ptr));
     size_t succ_alloc = GET_ALLOC(SUCC_HEADER(ptr));
     if (pred_alloc && succ_alloc) {
-        if (GET_PREALLOC(GET_HEADER(SUCC_BLK(ptr)))) {
-            WRITE(GET_HEADER(SUCC_BLK(ptr)), READ(GET_HEADER(SUCC_BLK(ptr))) ^ 2);
-        }
+        /* do nothing */
     } else if (pred_alloc) { //merge with succ
         _delete_free_block(SUCC_BLK(ptr));
         size_t newsize = GET_SIZE(GET_HEADER(ptr)) + GET_SIZE(SUCC_HEADER(ptr));
-        WRITE(GET_HEADER(ptr), PACK(newsize, pred_alloc));
+        WRITE(GET_HEADER(ptr), PACK(newsize, 0));
         WRITE(GET_FOOTER(ptr), PACK(newsize, 0)); //header has changed
     } else if (succ_alloc) {
         _delete_free_block(PRED_BLK(ptr));
         size_t newsize = GET_SIZE(GET_HEADER(ptr)) + GET_SIZE(PRED_FOOTER(ptr));
-        pred_alloc = GET_PREALLOC(GET_HEADER(PRED_BLK(ptr)));
-        WRITE(GET_HEADER(PRED_BLK(ptr)), PACK(newsize, pred_alloc));
+        WRITE(GET_HEADER(PRED_BLK(ptr)), PACK(newsize, 0));
         WRITE(GET_FOOTER(ptr), PACK(newsize, 0));
-        if (GET_PREALLOC(GET_HEADER(SUCC_BLK(ptr)))) {
-            WRITE(GET_HEADER(SUCC_BLK(ptr)), READ(GET_HEADER(SUCC_BLK(ptr))) ^ 2);
-        }
-        ptr = PRED_BLK(ptr);
+        ptr = PRED_BLK(ptr);  //header of ptr isn't changed
     } else {
         _delete_free_block(PRED_BLK(ptr));
         _delete_free_block(SUCC_BLK(ptr));
         size_t newsize = GET_SIZE(GET_HEADER(ptr)) + GET_SIZE(PRED_FOOTER(ptr)) + GET_SIZE(SUCC_HEADER(ptr));
-        pred_alloc = GET_PREALLOC(GET_HEADER(PRED_BLK(ptr)));
-        WRITE(GET_HEADER(PRED_BLK(ptr)), PACK(newsize, pred_alloc));
+        WRITE(GET_HEADER(PRED_BLK(ptr)), PACK(newsize, 0));
         WRITE(GET_FOOTER(SUCC_BLK(ptr)), PACK(newsize, 0));
         ptr = PRED_BLK(ptr);
     }
@@ -168,21 +160,18 @@ static void _build(void *ptr, size_t size) {
     _delete_free_block(ptr);
     //dbg_printf("build %lld %d\n", (long long)ptr, (int)size);
     size_t blksize = GET_SIZE(GET_HEADER(ptr));
-    size_t prealloc = GET_PREALLOC(GET_HEADER(ptr));
     if (blksize - size > ESIZE) {
-        WRITE(GET_HEADER(ptr), PACK(size, prealloc | 1));
+        WRITE(GET_HEADER(ptr), PACK(size, 1));
         WRITE(GET_FOOTER(ptr), PACK(size, 1));
         void *split = SUCC_BLK(ptr);
         blksize -= size;
-        WRITE(GET_HEADER(split), PACK(blksize, 2));
+        WRITE(GET_HEADER(split), PACK(blksize, 0));
         WRITE(GET_FOOTER(split), PACK(blksize, 0));
-        //dbg_printf("split merge %lld\n", (long long)split);
+    //dbg_printf("split merge %lld\n", (long long)split);
         _merge_free_blocks(split);
     } else {
-        WRITE(GET_HEADER(ptr), PACK(blksize, prealloc | 1));
+        WRITE(GET_HEADER(ptr), PACK(blksize, 1));
         WRITE(GET_FOOTER(ptr), PACK(blksize, 1));
-        void *succ = SUCC_BLK(ptr);
-        WRITE(GET_HEADER(succ), READ(GET_HEADER(succ)) | 2);
     }
 }
 
@@ -192,11 +181,9 @@ static void *_extend_heap(size_t extend_size) {
     if (ptr == (void *)-1) {
         return NULL;
     }
-    size_t prealloc = GET_PREALLOC(heap_end);
-    WRITE(GET_HEADER(ptr), PACK(extend_size, prealloc));
+    WRITE(GET_HEADER(ptr), PACK(extend_size, 0));
     WRITE(GET_FOOTER(ptr), PACK(extend_size, 0));
-    heap_end = GET_HEADER(SUCC_BLK(ptr));
-    WRITE(heap_end, PACK(0, 1));
+    WRITE(GET_HEADER(SUCC_BLK(ptr)), PACK(0, 1));
     return _merge_free_blocks(ptr);
 }
 
@@ -233,8 +220,7 @@ int mm_init(void) {
     WRITE(heap_ptr + (2 * WSIZE), 0);
     WRITE(heap_ptr + (3 * WSIZE), 0);
     WRITE(heap_ptr + (4 * WSIZE), PACK(ESIZE, 1));
-    WRITE(heap_ptr + (5 * WSIZE), PACK(0, 3));
-    heap_end = heap_ptr + (5 * WSIZE);
+    WRITE(heap_ptr + (5 * WSIZE), PACK(0, 1));
     heap_ptr += ESIZE;
     for (int i = 0; i <= max_level; ++i) {
         free_blks[i] = NULL;
@@ -247,8 +233,7 @@ void *malloc(size_t size) {
         return NULL;
     }
     //adjust size, align + header + footer
-    //size = DSIZE * ((size + DSIZE - 1) / DSIZE + 1);
-    size = MAX(ESIZE, DSIZE * ((size + WSIZE + DSIZE - 1) / DSIZE));
+    size = DSIZE * ((size + DSIZE - 1) / DSIZE + 1);
     //dbg_printf("start malloc %d\n", (int)size);
     char *ptr = _allocate(size);
     if (ptr != NULL) { //find a fit
@@ -268,10 +253,8 @@ void free(void *ptr) {
     if (ptr == NULL) {
         return;
     }
-    //printf("free %lld\n", (long long)(ptr));
     size_t size = GET_SIZE(GET_HEADER(ptr));
-    size_t prealloc = GET_PREALLOC(GET_HEADER(ptr));
-    WRITE(GET_HEADER(ptr), PACK(size, prealloc));
+    WRITE(GET_HEADER(ptr), PACK(size, 0));
     WRITE(GET_FOOTER(ptr), PACK(size, 0));
     _merge_free_blocks(ptr);
 }
@@ -288,7 +271,7 @@ void *realloc(void *oldptr, size_t size) {
     size_t oldsize = GET_SIZE(GET_HEADER(oldptr));
     size_t newsize = GET_SIZE(GET_HEADER(newptr));
     size_t cpysize = MIN(oldsize, newsize);
-    memcpy(newptr, oldptr, cpysize - WSIZE);
+    memcpy(newptr, oldptr, cpysize - DSIZE);
     free(oldptr);
     return newptr;
 }

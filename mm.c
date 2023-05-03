@@ -1,4 +1,4 @@
-/* malloc: segregated list + first 10 best fit */
+/* malloc: segregated list + first 8 best fit */
 
 #include <assert.h>
 #include <stdio.h>
@@ -189,7 +189,7 @@ static void *_extend_heap(size_t extend_size) {
 static void *_allocate(size_t size) {
     char *best_fit = NULL;
     size_t best_fit_size = 0;
-    int fit_cnt = 0;
+    int fit_cnt = 0, nfit_cnt = 0;
     for (void* ptr = free_blks; ptr != NULL; ptr = SUCC_FREE(ptr)) {
         size_t now_size = GET_SIZE(GET_HEADER(ptr));
         if (now_size >= size) {
@@ -197,7 +197,11 @@ static void *_allocate(size_t size) {
                 best_fit = ptr;
                 best_fit_size = now_size;
             }
-            if (++fit_cnt == 10) {
+            if (++fit_cnt == 8) {
+                return best_fit;
+            }
+        } else {
+            if (++nfit_cnt > 100 && fit_cnt) {
                 return best_fit;
             }
         }

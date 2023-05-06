@@ -201,7 +201,7 @@ static void *_allocate(size_t size) {
                 return best_fit;
             }
         } else {
-            if (++nfit_cnt > 100 && fit_cnt) {
+            if (++nfit_cnt > 42 && fit_cnt) {
                 return best_fit;
             }
         }

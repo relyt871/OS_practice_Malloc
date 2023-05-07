@@ -126,9 +126,7 @@ static void *_merge_free_blocks(void *ptr) {
     size_t pred_alloc = GET_PREALLOC(GET_HEADER(ptr));
     size_t succ_alloc = GET_ALLOC(SUCC_HEADER(ptr));
     if (pred_alloc && succ_alloc) {
-        if (GET_PREALLOC(GET_HEADER(SUCC_BLK(ptr)))) {
-            WRITE(GET_HEADER(SUCC_BLK(ptr)), READ(GET_HEADER(SUCC_BLK(ptr))) ^ 2);
-        }
+        RESET_PREALLOC(GET_HEADER(SUCC_BLK(ptr)));
     } else if (pred_alloc) { //merge with succ
         _delete_free_block(SUCC_BLK(ptr));
         size_t newsize = GET_SIZE(GET_HEADER(ptr)) + GET_SIZE(SUCC_HEADER(ptr));
@@ -140,9 +138,7 @@ static void *_merge_free_blocks(void *ptr) {
         pred_alloc = GET_PREALLOC(GET_HEADER(PRED_BLK(ptr)));
         WRITE(GET_HEADER(PRED_BLK(ptr)), PACK(newsize, pred_alloc));
         WRITE(GET_FOOTER(ptr), PACK(newsize, 0));
-        if (GET_PREALLOC(GET_HEADER(SUCC_BLK(ptr)))) {
-            WRITE(GET_HEADER(SUCC_BLK(ptr)), READ(GET_HEADER(SUCC_BLK(ptr))) ^ 2);
-        }
+        RESET_PREALLOC(GET_HEADER(SUCC_BLK(ptr)));
         ptr = PRED_BLK(ptr);
     } else {
         _delete_free_block(PRED_BLK(ptr));
@@ -177,7 +173,7 @@ static void _build(void *ptr, size_t size) {
         WRITE(GET_HEADER(ptr), PACK(blksize, prealloc | 1));
         WRITE(GET_FOOTER(ptr), PACK(blksize, 1));
         void *succ = SUCC_BLK(ptr);
-        WRITE(GET_HEADER(succ), READ(GET_HEADER(succ)) | 2);
+        SET_PREALLOC(GET_HEADER(succ));
     }
 }
 

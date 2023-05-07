@@ -70,14 +70,21 @@
 #define MAX(x, y) ((x) < (y)? (y) : (x))
 #define MIN(x, y) ((x) < (y)? (x) : (y))
 
+/* parameters of the fit strategy */
+#define MAX_FIT 6
+#define MAX_NFIT 28
+
+/* pointer to the first and last (unused) block of the heap */
 static char *heap_ptr, *heap_end;
+
+/* doubly linked list, maintain all free blocks */
 static char *free_blks;
 
+/* insert a free block to the front of the list */
 static void _insert_free_block(void *ptr) {
     if (ptr == NULL) {
         return;
     }
-    //dbg_printf("insert free %lld size = %d\n", (long long)ptr, (int)GET_SIZE(GET_HEADER(ptr)));
     if (free_blks == NULL) {
         free_blks = ptr;
         SET_PRED_FREE(ptr, 0);
@@ -90,13 +97,12 @@ static void _insert_free_block(void *ptr) {
     }
 }
 
+/* delete a block from any position in the list */
 static void _delete_free_block(void *ptr) {
     if (ptr == NULL) {
         return;
     }
-    //dbg_printf("delete free %lld size = %d\n", (long long)ptr, (int)GET_SIZE(GET_HEADER(ptr)));
     void *succ_free = SUCC_FREE(ptr);
-    //dbg_printf("succ_free = %lld\n", (long long)succ_free);
     if (free_blks == ptr) {
         if (succ_free == NULL) {
             free_blks = NULL;
@@ -106,7 +112,6 @@ static void _delete_free_block(void *ptr) {
         }
     } else {
         void *pred_free = PRED_FREE(ptr);
-    //dbg_printf("pred_free = %lld\n", (long long)pred_free);
         if (succ_free == NULL) {
             SET_SUCC_FREE(pred_free, 0);
         } else {
@@ -116,6 +121,7 @@ static void _delete_free_block(void *ptr) {
     }
 }
 
+/* when a block becomes free, try to merge it with neighboring blocks if they are free */
 static void *_merge_free_blocks(void *ptr) {
     size_t pred_alloc = GET_PREALLOC(GET_HEADER(ptr));
     size_t succ_alloc = GET_ALLOC(SUCC_HEADER(ptr));
@@ -147,12 +153,12 @@ static void *_merge_free_blocks(void *ptr) {
     return ptr;
 }
 
+/* given a free block, build an allocated block on it, split if necessary */
 static void _build(void *ptr, size_t size) {
     if (ptr == NULL) {
         return;
     }
     _delete_free_block(ptr);
-    //dbg_printf("build %lld %d\n", (long long)ptr, (int)size);
     size_t blksize = GET_SIZE(GET_HEADER(ptr));
     size_t prealloc = GET_PREALLOC(GET_HEADER(ptr));
     if (blksize - size > ESIZE) {
@@ -162,7 +168,6 @@ static void _build(void *ptr, size_t size) {
         blksize -= size;
         WRITE(GET_HEADER(split), PACK(blksize, 2));
         WRITE(GET_FOOTER(split), PACK(blksize, 0));
-        //dbg_printf("split merge %lld\n", (long long)split);
         _merge_free_blocks(split);
     } else {
         WRITE(GET_HEADER(ptr), PACK(blksize, prealloc | 1));
@@ -172,6 +177,7 @@ static void _build(void *ptr, size_t size) {
     }
 }
 
+/* ask for more space */
 static void *_extend_heap(size_t extend_size) {
     extend_size = (extend_size & 1)? ((extend_size + 1) * WSIZE) : (extend_size * WSIZE);
     char *ptr = mem_sbrk(extend_size);
@@ -186,6 +192,10 @@ static void *_extend_heap(size_t extend_size) {
     return _merge_free_blocks(ptr);
 }
 
+/* 
+ * fit strategy: find the best fit among the first MAX_FIT fits
+ * if already found a fit and more than MAX_NFIT unfit blocks, return immediately
+ */
 static void *_allocate(size_t size) {
     char *best_fit = NULL;
     size_t best_fit_size = 0;
@@ -197,11 +207,11 @@ static void *_allocate(size_t size) {
                 best_fit = ptr;
                 best_fit_size = now_size;
             }
-            if (++fit_cnt == 6) {
+            if (++fit_cnt == MAX_FIT) {
                 return best_fit;
             }
         } else {
-            if (++nfit_cnt > 42 && fit_cnt) {
+            if (++nfit_cnt > MAX_NFIT && fit_cnt) {
                 return best_fit;
             }
         }
@@ -212,6 +222,9 @@ static void *_allocate(size_t size) {
     return NULL;
 }
 
+/*
+ * mm_init - Called when a new trace starts.
+ */
 int mm_init(void) {
     if ((heap_ptr = mem_sbrk(6 * WSIZE)) == (void *)-1) {
         return -1;
@@ -228,14 +241,20 @@ int mm_init(void) {
     return 0;
 }
 
+/*
+ * malloc - Allocate a block
+ *      If there is a fit in the list, use the fit block.
+ *      Otherwise ask for more space from the heap.
+ *      Caution: footer is no longer needed for allocated blocks
+ */
 void *malloc(size_t size) {
     if (size == 0) {
         return NULL;
     }
-    //adjust size, align + header + footer
-    //size = DSIZE * ((size + DSIZE - 1) / DSIZE + 1);
+    /* without footer optimization: 
+     * size = DSIZE * ((size + DSIZE - 1) / DSIZE + 1);
+     */
     size = MAX(ESIZE, DSIZE * ((size + WSIZE + DSIZE - 1) / DSIZE));
-    //dbg_printf("start malloc %d\n", (int)size);
     char *ptr = _allocate(size);
     if (ptr != NULL) { //find a fit
         _build(ptr, size);
@@ -250,11 +269,14 @@ void *malloc(size_t size) {
     }
 }
 
+/*
+ * free - Reset the block (especially the footer).
+ *      First merge with neighboring free blocks, then insert to the list
+ */
 void free(void *ptr) {
     if (ptr == NULL) {
         return;
     }
-    //printf("free %lld\n", (long long)(ptr));
     size_t size = GET_SIZE(GET_HEADER(ptr));
     size_t prealloc = GET_PREALLOC(GET_HEADER(ptr));
     WRITE(GET_HEADER(ptr), PACK(size, prealloc));
@@ -262,6 +284,10 @@ void free(void *ptr) {
     _merge_free_blocks(ptr);
 }
 
+/*
+ * realloc - Change the size of the block by mallocing a new block,
+ *      copying its data, and freeing the old block.
+ */
 void *realloc(void *oldptr, size_t size) {
     if (size == 0) {
         free(oldptr);
@@ -279,6 +305,9 @@ void *realloc(void *oldptr, size_t size) {
     return newptr;
 }
 
+/*
+ * calloc - Allocate the block and set it to zero.
+ */
 void *calloc (size_t nmemb, size_t size) {
     size_t bytes = nmemb * size;
     void *newptr = malloc(bytes);
@@ -287,6 +316,6 @@ void *calloc (size_t nmemb, size_t size) {
 }
 
 void mm_checkheap(int verbose) {
-	/*Get gcc to be quiet. */
-	verbose = verbose;
+    /*Get gcc to be quiet. */
+    verbose = verbose;
 }
